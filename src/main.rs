@@ -37,6 +37,9 @@ impl EmulatedRam {
     }
 
     fn read_byte(&self, address: u16) -> u8 {
+        if address > 0xFFF {
+            panic!("Ram: tried to access memory out of bounds")
+        }
         self.data[address as usize]
     }
 
@@ -53,14 +56,14 @@ impl EmulatedScreen {
             pixels: [[false; 64]; 32],
         }
     }
-    // fn put_pixel(&mut self, x: u8, y: u8, pix: bool) -> Result<bool, &str> {
-    //     if x < 64 && y < 32 {
-    //         self.pixels[y as usize][x as usize] = pix;
-    //         Ok(pix)
-    //     } else {
-    //         Err("Attempting to put pixel out of bounds")
-    //     }
-    // }
+    fn put_pixel(&mut self, x: u8, y: u8, pix: bool) -> Result<bool, &str> {
+        if x < 64 && y < 32 {
+            self.pixels[y as usize][x as usize] = pix;
+            Ok(pix)
+        } else {
+            Err("Attempting to put pixel out of bounds")
+        }
+    }
 }
 struct DelayTimer {
     val: u8,
@@ -111,10 +114,17 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Ram Tests
+    #[test]
+    #[should_panic]
+    fn ram_out_of_bounds() {
+        let ram = EmulatedRam::new();
+        ram.read_byte(0x1000);
+    }
     #[test]
     fn ram_read() {
         let ram = EmulatedRam::new();
-        for i in 0x80..=0xFFF {
+        for i in FONT_START_ADDRESS + 80..=0xFFF {
             assert_eq!(ram.read_byte(i), 0);
         }
     }
@@ -141,5 +151,29 @@ mod tests {
         assert_eq!(ram.read_byte(FONT_START_ADDRESS + 79), 0x80);
         assert_eq!(fonts_from_ram, fonts);
     }
+    // Screen Tests
+    #[test]
+    fn screen_write_every_pixel() {
+        let mut screen = EmulatedScreen::new();
+        for y in 0..32 {
+            for x in 0..64 {
+                let res = screen.put_pixel(x, y, true);
+                assert_eq!(res, Ok(true));
+            }
+        }
+    }
+    #[test]
+    fn screen_write_oob() {
+        let mut screen = EmulatedScreen::new();
+        let bad_res = screen.put_pixel(255, 4, true);
+        assert_eq!(bad_res, Err("Attempting to put pixel out of bounds"));
+        let bad_res = screen.put_pixel(64, 4, true);
+        assert_eq!(bad_res, Err("Attempting to put pixel out of bounds"));
+        let bad_res = screen.put_pixel(30, 36, true);
+        assert_eq!(bad_res, Err("Attempting to put pixel out of bounds"));
+        let bad_res = screen.put_pixel(100, 100, true);
+        assert_eq!(bad_res, Err("Attempting to put pixel out of bounds"));
+        let bad_res = screen.put_pixel(63, 4, true);
+        assert_ne!(bad_res, Err("Attempting to put pixel out of bounds"));
+    }
 }
-
