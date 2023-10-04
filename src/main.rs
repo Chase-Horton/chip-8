@@ -29,7 +29,7 @@ impl EmulatedRam {
         let fonts = load_fonts();
         let mut address = FONT_START_ADDRESS;
         for font in fonts.iter() {
-            println!("{:#02x}", font);
+            // println!("{:#02x}", font);
             ram.write_byte(address, *font);
             address += 1
         }
@@ -58,11 +58,19 @@ impl EmulatedScreen {
         }
     }
     fn put_pixel(&mut self, x: u8, y: u8, pix: bool) -> Result<bool, &str> {
+        // need to wrap around take abs (y) % 32 and abs(x) % 64
         if x < 64 && y < 32 {
             self.pixels[y as usize][x as usize] = pix;
             Ok(pix)
         } else {
             Err("Attempting to put pixel out of bounds")
+        }
+    }
+    fn clear(&mut self) {
+        for x in 0..64 {
+            for y in 0..32 {
+                self.pixels[y][x] = false;
+            }
         }
     }
 }
@@ -75,14 +83,15 @@ impl DelayTimer {
         DelayTimer { val: 0 }
     }
 }
-
+#[derive(Debug, PartialEq)]
 enum OpCode {
-    CLR,        //clear screen
-    JMP,        //1NNN jmp to NNN
-    SET,        //6XNN set register VX , X is addr in v_registers of 0-F
-    ADD,        //7XNN add value to register VX
-    SetAddrReg, //ANNN set index register I
-    DXYN,       //display/draw
+    CLR,              //clear screen
+    JMP(u16),         //1NNN jmp to NNN
+    SET(u8, u8),      //6XNN set register VX , X is addr in v_registers of 0-F
+    ADD(u8, u8),      //7XNN add value to register VX
+    SetAddrReg(u16),  //ANNN set index register I
+    DXYN(u8, u8, u8), //display/draw
+    UNFINISHED,
 }
 
 struct Chip8 {
@@ -108,32 +117,69 @@ impl Chip8 {
             ram: EmulatedRam::new(),
         }
     }
+
     fn fetch(&mut self) -> u16 {
         let byte: u16 =
             (self.ram.read_byte(self.pc) as u16) << 8 | self.ram.read_byte(self.pc + 1) as u16;
         self.pc += 2;
         byte
     }
+    fn decode(&mut self, instruction: u16) -> OpCode {
+        let upper_byte = ((instruction & 0xFF00) >> 8) as u8;
+        let lower_byte = (instruction & 0x00FF) as u8;
+        let op = (upper_byte & 0xF0) >> 4;
+        let x = upper_byte & 0x0F;
+        let y = (lower_byte & 0xF0) >> 4;
+        let d = lower_byte & 0x0F;
+        let nnn = instruction & 0x0FFF;
+        println!("upper byte {:2x}", upper_byte);
+        println!("lower byte {:2x}", lower_byte);
+        println!("op {:2x}", op);
+        println!("x nibble {:1x}", x);
+        println!("y nibble {:1x}", y);
+        println!("nnn {:3x}", nnn);
+        match (op, x, y, d) {
+            (0, 0, 0xE, 0) => OpCode::CLR,
+            (1, _, _, _) => OpCode::JMP(nnn),
+            (6, _, _, _) => OpCode::SET(x, lower_byte),
+            (7, _, _, _) => OpCode::ADD(x, lower_byte),
+            (0xA, _, _, _) => OpCode::SetAddrReg(nnn),
+            (0xD, _, _, _) => OpCode::DXYN(x, y, d),
+            (_, _, _, _) => OpCode::UNFINISHED,
+        }
+    }
+    fn execute(&mut self, op_code: OpCode) {
+        match op_code {
+            OpCode::CLR => self.screen.clear(),
+            OpCode::JMP(addr) => self.pc = addr,
+            OpCode::ADD(v_x, kk) => self.v_registers[v_x as usize] += kk,
+            OpCode::SET(v_x, v_y) => {
+                //set v_x to v_y
+                self.v_registers[v_x as usize] = self.v_registers[v_y as usize];
+            }
+            OpCode::SetAddrReg(addr) => self.i_reg = addr,
+            OpCode::DXYN(v_x, v_y, n) => {
+                //Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision.
+                //The interpreter reads n bytes from memory, starting at the address stored in I.
+                //These bytes are then displayed as sprites on screen at coordinates (Vx, Vy).
+                //Sprites are XORed onto the existing screen. If this causes any pixels to be erased,
+                //VF is set to 1, otherwise it is set to 0. If the sprite is positioned so part of it is outside the
+                //coordinates of the display, it wraps around to the opposite side of the screen.
+                //See instruction 8xy3 for more information on XOR, and section 2.4, Display, for more information on the Chip-8 screen and sprites.
+            }
+            _ => {}
+        }
+    }
     fn run(&mut self) {
         let instruction = self.fetch();
-        let opCode = self.decode(instruction)
+        let op_code = self.decode(instruction);
+        println!("{:?}", op_code)
     }
 }
 fn main() {
-    let mut ram = EmulatedRam::new();
-
-    // Write a value to address 0x0A
-    ram.write_byte(0xFFF, 0x42);
-
-    // Read the value at address 0x0A
-    let value = ram.read_byte(0xFFF);
-
-    println!("Value at address 0xFFF: 0x{:02X}", value);
-
-    // Screen
-    let mut screen = EmulatedScreen::new();
-    screen.pixels[20][45] = true;
-    println!("{:?}", screen.pixels[20][45]);
+    //let mut chip8 = Chip8::new();
+    //let op_code = chip8.decode(0x00E0);
+    //println!("{:?}", op_code)
 }
 
 #[cfg(test)]
@@ -209,12 +255,34 @@ mod tests {
         chip8.pc = 0;
         chip8.ram.write_byte(0, 0xAB);
         chip8.ram.write_byte(1, 0xCD);
-        chip8.ram.write_byte(2, 0x25);
-        chip8.ram.write_byte(3, 0xCD);
+        chip8.ram.write_byte(2, 0x00);
+        chip8.ram.write_byte(3, 0xE0);
         let res = chip8.fetch();
         assert_eq!(res, 0xABCD);
         //check that it increments
         let res = chip8.fetch();
-        assert_eq!(res, 0x25CD);
+        assert_eq!(res, 0x00E0);
+    }
+    #[test]
+    fn decoder_test() {
+        let mut chip8 = Chip8::new();
+
+        let res = chip8.decode(0x00E0);
+        assert_eq!(res, OpCode::CLR);
+
+        let res = chip8.decode(0x1ABC);
+        assert_eq!(res, OpCode::JMP(0xABC));
+
+        let res = chip8.decode(0x7B44);
+        assert_eq!(res, OpCode::ADD(0xB, 0x44));
+
+        let res = chip8.decode(0x6B44);
+        assert_eq!(res, OpCode::SET(0xB, 0x44));
+
+        let res = chip8.decode(0xACDE);
+        assert_eq!(res, OpCode::SetAddrReg(0x0CDE));
+
+        let res = chip8.decode(0xD123);
+        assert_eq!(res, OpCode::DXYN(1, 2, 3))
     }
 }
