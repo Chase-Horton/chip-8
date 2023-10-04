@@ -47,6 +47,7 @@ impl EmulatedRam {
         self.data[address as usize] = value;
     }
 }
+
 struct EmulatedScreen {
     pixels: [[bool; 64]; 32],
 }
@@ -65,6 +66,7 @@ impl EmulatedScreen {
         }
     }
 }
+
 struct DelayTimer {
     val: u8,
 }
@@ -73,10 +75,21 @@ impl DelayTimer {
         DelayTimer { val: 0 }
     }
 }
+
+enum OpCode {
+    CLR,        //clear screen
+    JMP,        //1NNN jmp to NNN
+    SET,        //6XNN set register VX , X is addr in v_registers of 0-F
+    ADD,        //7XNN add value to register VX
+    SetAddrReg, //ANNN set index register I
+    DXYN,       //display/draw
+}
+
 struct Chip8 {
     pc: u16,
     i_reg: u16,
     address_stack: Vec<u16>,
+    stack_pointer: u8,
     delay_timer: DelayTimer,
     v_registers: Vec<u8>,
     screen: EmulatedScreen,
@@ -88,11 +101,22 @@ impl Chip8 {
             pc: 0,
             i_reg: 0,
             address_stack: Vec::new(),
+            stack_pointer: 0,
             delay_timer: DelayTimer::new(),
             v_registers: Vec::new(),
             screen: EmulatedScreen::new(),
             ram: EmulatedRam::new(),
         }
+    }
+    fn fetch(&mut self) -> u16 {
+        let byte: u16 =
+            (self.ram.read_byte(self.pc) as u16) << 8 | self.ram.read_byte(self.pc + 1) as u16;
+        self.pc += 2;
+        byte
+    }
+    fn run(&mut self) {
+        let instruction = self.fetch();
+        let opCode = self.decode(instruction)
     }
 }
 fn main() {
@@ -111,6 +135,7 @@ fn main() {
     screen.pixels[20][45] = true;
     println!("{:?}", screen.pixels[20][45]);
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +200,21 @@ mod tests {
         assert_eq!(bad_res, Err("Attempting to put pixel out of bounds"));
         let bad_res = screen.put_pixel(63, 4, true);
         assert_ne!(bad_res, Err("Attempting to put pixel out of bounds"));
+    }
+
+    #[test]
+    fn instruction_fetch() {
+        //should fetch instruction and increment pc by 2
+        let mut chip8 = Chip8::new();
+        chip8.pc = 0;
+        chip8.ram.write_byte(0, 0xAB);
+        chip8.ram.write_byte(1, 0xCD);
+        chip8.ram.write_byte(2, 0x25);
+        chip8.ram.write_byte(3, 0xCD);
+        let res = chip8.fetch();
+        assert_eq!(res, 0xABCD);
+        //check that it increments
+        let res = chip8.fetch();
+        assert_eq!(res, 0x25CD);
     }
 }
