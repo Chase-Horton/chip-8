@@ -173,7 +173,7 @@ impl Chip8 {
             OpCode::ADD(v_x, kk) => self.v_registers[v_x as usize] += kk,
             OpCode::SET(v_x, kk) => self.v_registers[v_x as usize] = kk,
             OpCode::SetAddrReg(addr) => self.i_reg = addr,
-            OpCode::DXYN(v_x, v_y, n) => {
+            OpCode::DXYN(x, y, n) => {
                 //Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision.
                 //The interpreter reads n bytes from memory, starting at the address stored in I.
                 //These bytes are then displayed as sprites on screen at coordinates (Vx, Vy).
@@ -181,6 +181,27 @@ impl Chip8 {
                 //VF is set to 1, otherwise it is set to 0. If the sprite is positioned so part of it is outside the
                 //coordinates of the display, it wraps around to the opposite side of the screen.
                 //See instruction 8xy3 for more information on XOR, and section 2.4, Display, for more information on the Chip-8 screen and sprites.
+                let v_x = self.v_registers[x as usize];
+                let v_y = self.v_registers[y as usize];
+                // set flag to 0
+                self.v_registers[0xF] = 0x0;
+                for row in 0..n {
+                    let spirte_byte_from_mem = self.ram.read_byte(self.i_reg + row as u16);
+                    for col in 0..8 {
+                        // shift to right and get last bit
+                        let pixel = (spirte_byte_from_mem >> (7 - col)) & 1;
+                        // wrap around
+                        let screen_x = ((v_x + col) % 64) as usize;
+                        let screen_y = ((v_y + row) % 32) as usize;
+                        // set flag
+                        if pixel == 1 {
+                            if self.screen.pixels[screen_y][screen_x] {
+                                self.v_registers[0xF] = 0x1;
+                            }
+                            self.screen.pixels[screen_y][screen_x] ^= true;
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -353,10 +374,58 @@ mod tests {
         chip8.execute(res);
         assert_eq!(chip8.v_registers[0xC], 0x44);
     }
+    #[test]
     fn execute_set_addr_reg() {
         let mut chip8 = Chip8::new();
         let res = chip8.decode(0xAC44);
         chip8.execute(res);
         assert_eq!(chip8.i_reg, 0xC44);
+    }
+    #[test]
+    fn execute_display() {
+        let mut chip8 = Chip8::new();
+        //test basic display of 1 byte
+        chip8.ram.write_byte(0x300, 0b11011001);
+        chip8.i_reg = 0x300;
+        chip8.v_registers[0] = 0;
+        chip8.v_registers[1] = 0;
+        let res = chip8.decode(0xD011);
+        chip8.execute(res);
+        assert_eq!(chip8.screen.pixels[0][0], true);
+        assert_eq!(chip8.screen.pixels[0][1], true);
+        assert_eq!(chip8.screen.pixels[0][2], false);
+        assert_eq!(chip8.screen.pixels[0][3], true);
+        assert_eq!(chip8.screen.pixels[0][4], true);
+        assert_eq!(chip8.screen.pixels[0][5], false);
+        assert_eq!(chip8.screen.pixels[0][6], false);
+        assert_eq!(chip8.screen.pixels[0][7], true);
+    }
+    #[test]
+    fn execute_display_two_rows() {
+        let mut chip8 = Chip8::new();
+        //test basic display of 1 byte
+        chip8.ram.write_byte(0x300, 0b11011001);
+        chip8.ram.write_byte(0x301, 0b10101010);
+        chip8.i_reg = 0x300;
+        chip8.v_registers[0] = 0;
+        chip8.v_registers[1] = 0;
+        let res = chip8.decode(0xD012);
+        chip8.execute(res);
+        assert_eq!(chip8.screen.pixels[0][0], true);
+        assert_eq!(chip8.screen.pixels[0][1], true);
+        assert_eq!(chip8.screen.pixels[0][2], false);
+        assert_eq!(chip8.screen.pixels[0][3], true);
+        assert_eq!(chip8.screen.pixels[0][4], true);
+        assert_eq!(chip8.screen.pixels[0][5], false);
+        assert_eq!(chip8.screen.pixels[0][6], false);
+        assert_eq!(chip8.screen.pixels[0][7], true);
+        assert_eq!(chip8.screen.pixels[1][0], true);
+        assert_eq!(chip8.screen.pixels[1][1], false);
+        assert_eq!(chip8.screen.pixels[1][2], true);
+        assert_eq!(chip8.screen.pixels[1][3], false);
+        assert_eq!(chip8.screen.pixels[1][4], true);
+        assert_eq!(chip8.screen.pixels[1][5], false);
+        assert_eq!(chip8.screen.pixels[1][6], true);
+        assert_eq!(chip8.screen.pixels[1][7], false);
     }
 }
