@@ -1,8 +1,8 @@
 #![allow(unused)]
-struct EmulatedRam {
-    data: [u8; 0x1000 as usize], // 4096 bytes of memory
-}
-static FONT_START_ADDRESS: u16 = 0x50;
+
+use std::fs;
+
+static FONT_START_ADDRESS: u16 = 0x00;
 fn load_fonts() -> [u8; 80] {
     [
         0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -23,6 +23,10 @@ fn load_fonts() -> [u8; 80] {
         0xF0, 0x80, 0xF0, 0x80, 0x80, // F
     ]
 }
+
+struct EmulatedRam {
+    data: [u8; 0x1000 as usize], // 4096 bytes of memory
+}
 impl EmulatedRam {
     fn new() -> Self {
         let mut ram = EmulatedRam { data: [0; 0x1000] };
@@ -42,9 +46,21 @@ impl EmulatedRam {
         }
         self.data[address as usize]
     }
-
     fn write_byte(&mut self, address: u16, value: u8) {
         self.data[address as usize] = value;
+    }
+
+    fn load_program(&mut self, data: Vec<u8>) {
+        let mut counter = 0x200;
+        for byte in data {
+            self.write_byte(counter, byte);
+            counter += 1;
+        }
+    }
+
+    fn load_program_from_file(&mut self, file_path: &str) {
+        let contents = fs::read(file_path).expect("failed to open program from file");
+        self.load_program(contents);
     }
 }
 
@@ -83,6 +99,7 @@ impl DelayTimer {
         DelayTimer { val: 0 }
     }
 }
+
 #[derive(Debug, PartialEq)]
 enum OpCode {
     CLR,              //clear screen
@@ -100,7 +117,7 @@ struct Chip8 {
     address_stack: Vec<u16>,
     stack_pointer: u8,
     delay_timer: DelayTimer,
-    v_registers: Vec<u8>,
+    v_registers: [u8; 16],
     screen: EmulatedScreen,
     ram: EmulatedRam,
 }
@@ -112,7 +129,7 @@ impl Chip8 {
             address_stack: Vec::new(),
             stack_pointer: 0,
             delay_timer: DelayTimer::new(),
-            v_registers: Vec::new(),
+            v_registers: [0x0; 16],
             screen: EmulatedScreen::new(),
             ram: EmulatedRam::new(),
         }
@@ -124,6 +141,7 @@ impl Chip8 {
         self.pc += 2;
         byte
     }
+
     fn decode(&mut self, instruction: u16) -> OpCode {
         let upper_byte = ((instruction & 0xFF00) >> 8) as u8;
         let lower_byte = (instruction & 0x00FF) as u8;
@@ -132,12 +150,12 @@ impl Chip8 {
         let y = (lower_byte & 0xF0) >> 4;
         let d = lower_byte & 0x0F;
         let nnn = instruction & 0x0FFF;
-        println!("upper byte {:2x}", upper_byte);
-        println!("lower byte {:2x}", lower_byte);
-        println!("op {:2x}", op);
-        println!("x nibble {:1x}", x);
-        println!("y nibble {:1x}", y);
-        println!("nnn {:3x}", nnn);
+        // println!("upper byte {:2x}", upper_byte);
+        // println!("lower byte {:2x}", lower_byte);
+        // println!("op {:2x}", op);
+        // println!("x nibble {:1x}", x);
+        // println!("y nibble {:1x}", y);
+        // println!("nnn {:3x}", nnn);
         match (op, x, y, d) {
             (0, 0, 0xE, 0) => OpCode::CLR,
             (1, _, _, _) => OpCode::JMP(nnn),
@@ -153,10 +171,7 @@ impl Chip8 {
             OpCode::CLR => self.screen.clear(),
             OpCode::JMP(addr) => self.pc = addr,
             OpCode::ADD(v_x, kk) => self.v_registers[v_x as usize] += kk,
-            OpCode::SET(v_x, v_y) => {
-                //set v_x to v_y
-                self.v_registers[v_x as usize] = self.v_registers[v_y as usize];
-            }
+            OpCode::SET(v_x, kk) => self.v_registers[v_x as usize] = kk,
             OpCode::SetAddrReg(addr) => self.i_reg = addr,
             OpCode::DXYN(v_x, v_y, n) => {
                 //Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision.
@@ -170,14 +185,25 @@ impl Chip8 {
             _ => {}
         }
     }
-    fn run(&mut self) {
+    fn cycle(&mut self) {
         let instruction = self.fetch();
+        println!("{:04x}", instruction);
         let op_code = self.decode(instruction);
         println!("{:?}", op_code)
+        // self.execute(op_code)
+    }
+    fn run(&mut self) {
+        self.pc = 0x200;
+        for _ in 0..50 {
+            self.cycle();
+        }
     }
 }
 fn main() {
-    //let mut chip8 = Chip8::new();
+    let mut chip8 = Chip8::new();
+    chip8.ram.load_program_from_file("1-chip8-logo.ch8");
+    chip8.run();
+    // println!("{:?}", ram.data)
     //let op_code = chip8.decode(0x00E0);
     //println!("{:?}", op_code)
 }
@@ -263,6 +289,7 @@ mod tests {
         let res = chip8.fetch();
         assert_eq!(res, 0x00E0);
     }
+    // decoder
     #[test]
     fn decoder_test() {
         let mut chip8 = Chip8::new();
@@ -284,5 +311,52 @@ mod tests {
 
         let res = chip8.decode(0xD123);
         assert_eq!(res, OpCode::DXYN(1, 2, 3))
+    }
+    // execute
+    #[test]
+    fn execute_clr() {
+        let mut chip8 = Chip8::new();
+        chip8.screen.put_pixel(0, 0, true);
+        assert_eq!(chip8.screen.pixels[0][0], true);
+        chip8.screen.put_pixel(20, 20, true);
+        assert_eq!(chip8.screen.pixels[20][20], true);
+        let res = chip8.decode(0x00E0);
+        chip8.execute(res);
+        assert_eq!(chip8.screen.pixels[0][0], false);
+        assert_eq!(chip8.screen.pixels[20][20], false);
+    }
+    #[test]
+    fn execute_jmp() {
+        let mut chip8 = Chip8::new();
+        let res = chip8.decode(0x1ABC);
+        chip8.execute(res);
+        assert_eq!(chip8.pc, 0xABC)
+    }
+    #[test]
+    fn execute_add() {
+        let mut chip8 = Chip8::new();
+        assert_eq!(chip8.v_registers[0xC], 0);
+        let res = chip8.decode(0x7C04);
+        chip8.execute(res);
+        assert_eq!(chip8.v_registers[0xC], 0x04);
+        let res = chip8.decode(0x7C04);
+        chip8.execute(res);
+        assert_eq!(chip8.v_registers[0xC], 0x08);
+        let res = chip8.decode(0x7C04);
+        chip8.execute(res);
+        assert_eq!(chip8.v_registers[0xC], 0x0C);
+    }
+    #[test]
+    fn execute_set() {
+        let mut chip8 = Chip8::new();
+        let res = chip8.decode(0x6C44);
+        chip8.execute(res);
+        assert_eq!(chip8.v_registers[0xC], 0x44);
+    }
+    fn execute_set_addr_reg() {
+        let mut chip8 = Chip8::new();
+        let res = chip8.decode(0xAC44);
+        chip8.execute(res);
+        assert_eq!(chip8.i_reg, 0xC44);
     }
 }
