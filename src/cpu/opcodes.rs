@@ -15,9 +15,9 @@ pub enum OpCode {
     BXOR(u8, u8),     //8XY3 set VX to VX ^ VY
     AddXY(u8, u8),    //8XY4 set VX to VX + VY, set VF to 1 if carry
     SubXY(u8, u8),    //8XY5 set VX to VX - VY, set VF to 0 if borrow
-    SHR(u8),          //8XY6 set VX to VX >> 1, set VF to least significant bit of VX before shift
+    SHR(u8, u8),          //8XY6 set VX to VX >> 1, set VF to least significant bit of VX before shift
     SUBN(u8, u8),     //8XY7 set VX to VY - VX, set VF to 0 if borrow
-    SHL(u8),          //8XYE set VX to VX << 1, set VF to most significant bit of VX before shift
+    SHL(u8, u8),          //8XYE set VX to VX << VY, set VF to most significant bit of VX before shift
     SkipNotEqualXY(u8, u8), //9XY0 skip next instruction if VX != VY
     SetAddrReg(u16),  //ANNN set index register I
     JumpPlusV0(u16),      //BNNN jump to NNN + V0

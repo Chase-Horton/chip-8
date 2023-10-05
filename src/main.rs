@@ -17,6 +17,11 @@ const HEIGHT: usize = 640;
 const BACKGROUND_COLOR: u32 = 0x0;
 const ACTIVE_COLOR: u32 = 0xFFFFFFFF;
 const SCALE: usize = 20;
+
+const FPS:f32 = 240.0;
+const UPDATE_RATE:f32 = 1.0 / FPS;
+const UPDATE_RATE_MS:f32 = UPDATE_RATE * 1000.0;
+
 fn main() {
     let mut fake_screen: [[bool; 64]; 32] = [[false; 64]; 32];
     for y in 0..32 {
@@ -38,10 +43,10 @@ fn main() {
         });
 
     // Limit to max ~60 fps update rate
-    window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
+    window.limit_update_rate(Some(std::time::Duration::from_millis(UPDATE_RATE_MS as u64)));
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-       // if window.is_key_pressed(Key::Space, KeyRepeat::Yes) {
+        //if window.is_key_pressed(Key::Space, KeyRepeat::Yes) {
             chip8.cycle();
             fake_screen = chip8.get_screen();
             //println!("{:?}", chip8.v_registers[6]);
