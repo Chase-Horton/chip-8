@@ -41,10 +41,13 @@ fn main() {
     window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        if window.is_key_pressed(Key::Space, KeyRepeat::Yes) {
+       // if window.is_key_pressed(Key::Space, KeyRepeat::Yes) {
             chip8.cycle();
             fake_screen = chip8.get_screen();
-        }
+            //println!("{:?}", chip8.v_registers[6]);
+            //println!("{:?}", chip8.i_reg);
+            //chip8.debug_print_data();
+        //}
         for x in 0..64 {
             for y in 0..32 {
                 if fake_screen[y][x] {

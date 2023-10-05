@@ -18,7 +18,7 @@ impl DelayTimer {
 
 pub struct Chip8 {
     pub pc: u16,
-    i_reg: u16,
+    pub i_reg: u16,
     address_stack: Vec<u16>,
     stack_pointer: u8,
     delay_timer: DelayTimer,
@@ -96,11 +96,11 @@ impl Chip8 {
             // (0xF, _, 0, 0xA) => OpCode::WaitForKeyPress(x),
             // (0xF, _, 1, 5) => OpCode::SetDelayTimer(x),
             // (0xF, _, 1, 8) => OpCode::SetSoundTimer(x),
-            // (0xF, _, 1, 0xE) => OpCode::AddVxToI(x),
+            (0xF, _, 1, 0xE) => OpCode::AddVxToI(x),
             // (0xF, _, 2, 9) => OpCode::SetIToSprite(x),
-            // (0xF, _, 3, 3) => OpCode::StoreBCD(x),
-            // (0xF, _, 5, 5) => OpCode::StoreV0ToVx(x),
-            // (0xF, _, 6, 5) => OpCode::ReadV0ToVx(x),
+            (0xF, _, 3, 3) => OpCode::SaveBCD(x),
+            (0xF, _, 5, 5) => OpCode::StoreV0ToVx(x),
+            (0xF, _, 6, 5) => OpCode::ReadV0ToVx(x),
             (_, _, _, _) => OpCode::UNFINISHED,
         }
     }
@@ -162,14 +162,21 @@ impl Chip8 {
                 self.v_registers[x as usize] ^= self.v_registers[y as usize];
             }
             OpCode::AddXY(x, y) => {
-                let (res, overflow) = self.v_registers[x as usize].overflowing_add(self.v_registers[y as usize]);
-                self.v_registers[x as usize] = res;
-                self.v_registers[0xF] = overflow as u8;
+                let res = self.v_registers[x as usize] as u16 + self.v_registers[y as usize] as u16;
+                if res > 255 {
+                    self.v_registers[x as usize] = res as u8;
+                    self.v_registers[0xF] = 1;
+                }
+                else {
+                    self.v_registers[x as usize] += self.v_registers[y as usize];
+                    self.v_registers[0xF] = 0;
+                }
             }
             OpCode::SubXY(x, y) => {
-                let (res, overflow) = self.v_registers[x as usize].overflowing_sub(self.v_registers[y as usize]);
-                self.v_registers[x as usize] = res;
-                self.v_registers[0xF] = overflow as u8;
+                let x = x as usize;
+                let y = y as usize;
+                self.v_registers[0x0f] = if self.v_registers[x] > self.v_registers[y] { 1 } else { 0 };
+                self.v_registers[x] = self.v_registers[x].wrapping_sub(self.v_registers[y]);
             }
             OpCode::SHR(x) => {
                 self.v_registers[0xF] = self.v_registers[x as usize] & 0x1;
@@ -199,9 +206,37 @@ impl Chip8 {
             OpCode::RET => {
                 self.stack_pointer -= 1;
                 self.pc = self.address_stack.pop().unwrap();
-            }
+            },
+            OpCode::AddVxToI(x) => {
+                self.i_reg += self.v_registers[x as usize] as u16;
+            },
+            OpCode::SaveBCD(x) => {
+                let val = self.v_registers[x as usize];
+                self.ram.write_byte(self.i_reg, val / 100);
+                self.ram.write_byte(self.i_reg + 1, (val / 10) % 10);
+                self.ram.write_byte(self.i_reg + 2, val % 10);
+            },
+            OpCode::StoreV0ToVx(x) => {
+                for i in 0..=x {
+                    self.ram.write_byte(self.i_reg + i as u16, self.v_registers[i as usize]);
+                }
+            },
+            OpCode::ReadV0ToVx(x) => {
+                for i in 0..=x {
+                    self.v_registers[i as usize] = self.ram.read_byte(self.i_reg + i as u16);
+                }
+            },
+            
             OpCode::UNFINISHED => {}
         }
+    }
+    // function to print out the data in the registers and the i register as well as the stack and stack pointer
+    pub fn debug_print_data(&mut self){
+        println!("pc: {:x}", self.pc);
+        println!("i register: {:x}", self.i_reg);
+        println!("stack pointer: {:x}", self.stack_pointer);
+        println!("stack: {:?}", self.address_stack);
+        println!("v registers: {:?}", self.v_registers);
     }
     pub fn cycle(&mut self) {
         let instruction = self.fetch();
@@ -413,12 +448,12 @@ mod tests {
         cpu.v_registers[1] = 0b10;
         cpu.execute(OpCode::SubXY(0, 1));
         assert_eq!(cpu.v_registers[0], 0b01);
-        assert_eq!(cpu.v_registers[0xF], 0x0);
+        assert_eq!(cpu.v_registers[0xF], 0x1);
         cpu.v_registers[0] = 0b01;
         cpu.v_registers[1] = 0b10;
         cpu.execute(OpCode::SubXY(0, 1));
         assert_eq!(cpu.v_registers[0], 255);
-        assert_eq!(cpu.v_registers[0xF], 0x1);
+        assert_eq!(cpu.v_registers[0xF], 0x0);
     }
     #[test]
     fn execute_shr() {
@@ -491,5 +526,55 @@ mod tests {
         cpu.execute(OpCode::RET);
         assert_eq!(cpu.stack_pointer, 0);
         assert_eq!(cpu.pc, 0xF0);
+    }
+    #[test]
+    fn execute_add_vx_to_i() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0x10;
+        cpu.i_reg = 0x10;
+        cpu.execute(OpCode::AddVxToI(0));
+        assert_eq!(cpu.i_reg, 0x20);
+    }
+    #[test]
+    fn execute_save_bcd() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 123;
+        cpu.i_reg = 0x10;
+        cpu.execute(OpCode::SaveBCD(0));
+        assert_eq!(cpu.ram.read_byte(0x10), 1);
+        assert_eq!(cpu.ram.read_byte(0x11), 2);
+        assert_eq!(cpu.ram.read_byte(0x12), 3);
+    }
+    #[test]
+    fn execute_store_v0_to_vx() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0x10;
+        cpu.v_registers[1] = 0x11;
+        cpu.v_registers[2] = 0x12;
+        cpu.v_registers[3] = 0x13;
+        cpu.i_reg = 0x10;
+        cpu.execute(OpCode::StoreV0ToVx(4));
+        assert_eq!(cpu.ram.read_byte(0x10), 0x10);
+        assert_eq!(cpu.ram.read_byte(0x11), 0x11);
+        assert_eq!(cpu.ram.read_byte(0x12), 0x12);
+        assert_eq!(cpu.ram.read_byte(0x13), 0x13);
+    }
+    #[test]
+    fn execute_read_v0_to_vx() {
+        let mut cpu = Chip8::new();
+        cpu.ram.write_byte(0x10, 0x10);
+        cpu.ram.write_byte(0x11, 0x11);
+        cpu.ram.write_byte(0x12, 0x12);
+        cpu.ram.write_byte(0x13, 0x13);
+        cpu.ram.write_byte(0x14, 0x14);
+        cpu.ram.write_byte(0x15, 0x15);
+        cpu.i_reg = 0x10;
+        cpu.execute(OpCode::ReadV0ToVx(6));
+        assert_eq!(cpu.v_registers[0], 0x10);
+        assert_eq!(cpu.v_registers[1], 0x11);
+        assert_eq!(cpu.v_registers[2], 0x12);
+        assert_eq!(cpu.v_registers[3], 0x13);
+        assert_eq!(cpu.v_registers[4], 0x14);
+        assert_eq!(cpu.v_registers[5], 0x15);
     }
 }
