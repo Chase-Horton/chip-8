@@ -13,6 +13,9 @@ impl EmulatedScreen {
     pub fn get_pixel(&self, x: u8, y: u8) -> bool {
         self.pixels[y as usize][x as usize]
     }
+    pub fn get_screen(&self) -> [[bool; 64]; 32] {
+        self.pixels
+    }
     pub fn write_byte(&mut self, x: u8, y_plus_row: u8, byte: u8) -> u8 {
         let mut v_f: u8 = 0;
         for col in 0..8 {

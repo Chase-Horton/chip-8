@@ -4,7 +4,8 @@ mod ram;
 use ram::EmulatedRam;
 mod screen;
 use screen::EmulatedScreen;
-use std::fs;
+use std::{fs, ops::Add};
+use rand;
 
 struct DelayTimer {
     val: u8,
@@ -38,6 +39,9 @@ impl Chip8 {
             ram: EmulatedRam::new(),
         }
     }
+    pub fn get_screen(&self) -> [[bool; 64]; 32] {
+        self.screen.get_screen()
+    }
     pub fn load_program(&mut self, path: &str) {
         self.ram.load_program_from_file(path);
     }
@@ -64,11 +68,39 @@ impl Chip8 {
         // println!("nnn {:3x}", nnn);
         match (op, x, y, d) {
             (0, 0, 0xE, 0) => OpCode::CLR,
-            (1, _, _, _) => OpCode::JMP(nnn),
-            (6, _, _, _) => OpCode::SET(x, lower_byte),
-            (7, _, _, _) => OpCode::ADD(x, lower_byte),
+            (0, 0, 0xE, 0xE) => OpCode::RET,
+            (0x1, _, _, _) => OpCode::JMP(nnn),
+            (0x2, _, _, _) => OpCode::CALL(nnn),
+            (0x3, _, _, _) => OpCode::SkipEqualNN(x, lower_byte),
+            (0x4, _, _, _) => OpCode::SkipNotEqualNN(x, lower_byte),
+            (0x5, _, _, _) => OpCode::SkipEqualXY(x, y),
+            (0x6, _, _, _) => OpCode::SET(x, lower_byte),
+            (0x7, _, _, _) => OpCode::ADD(x, lower_byte),
+            (0x8, _, _, 0) => OpCode::LDXY(x, y),
+            (0x8, _, _, 1) => OpCode::BOR(x, y),
+            (0x8, _, _, 2) => OpCode::BAND(x, y),
+            (0x8, _, _, 3) => OpCode::BXOR(x, y),
+            (0x8, _, _, 4) => OpCode::AddXY(x, y),
+            (0x8, _, _, 5) => OpCode::SubXY(x, y),
+            (0x8, _, _, 6) => OpCode::SHR(x),
+            (0x8, _, _, 7) => OpCode::SUBN(x, y),
+            (0x8, _, _, 0xE) => OpCode::SHL(x),
+            (0x9, _, _, 0) => OpCode::SkipNotEqualXY(x, y),
             (0xA, _, _, _) => OpCode::SetAddrReg(nnn),
+            (0xB, _, _, _) => OpCode::JumpPlusV0(nnn),
+            (0xC, _, _, _) => OpCode::RAND(x, lower_byte),
             (0xD, _, _, _) => OpCode::DXYN(x, y, d),
+            // (0xE, _, 9, 0xE) => OpCode::SkipKeyPressed(x),
+            // (0xE, _, 0xA, 1) => OpCode::SkipKeyNotPressed(x),
+            // (0xF, _, 0, 7) => OpCode::SetVxToDelayTimer(x),
+            // (0xF, _, 0, 0xA) => OpCode::WaitForKeyPress(x),
+            // (0xF, _, 1, 5) => OpCode::SetDelayTimer(x),
+            // (0xF, _, 1, 8) => OpCode::SetSoundTimer(x),
+            // (0xF, _, 1, 0xE) => OpCode::AddVxToI(x),
+            // (0xF, _, 2, 9) => OpCode::SetIToSprite(x),
+            // (0xF, _, 3, 3) => OpCode::StoreBCD(x),
+            // (0xF, _, 5, 5) => OpCode::StoreV0ToVx(x),
+            // (0xF, _, 6, 5) => OpCode::ReadV0ToVx(x),
             (_, _, _, _) => OpCode::UNFINISHED,
         }
     }
@@ -76,7 +108,7 @@ impl Chip8 {
         match op_code {
             OpCode::CLR => self.screen.clear(),
             OpCode::JMP(addr) => self.pc = addr,
-            OpCode::ADD(v_x, kk) => self.v_registers[v_x as usize] += kk,
+            OpCode::ADD(v_x, kk) => self.v_registers[v_x as usize] = self.v_registers[v_x as usize].wrapping_add(kk),
             OpCode::SET(v_x, kk) => self.v_registers[v_x as usize] = kk,
             OpCode::SetAddrReg(addr) => self.i_reg = addr,
             OpCode::DXYN(x, y, n) => {
@@ -97,7 +129,78 @@ impl Chip8 {
                         self.screen.write_byte(v_x, v_y + row, spirte_byte_from_mem)
                 }
             }
-            _ => {}
+            OpCode::CALL(nnn) => {
+                self.stack_pointer += 1;
+                self.address_stack.push(self.pc);
+                self.pc = nnn;
+            }
+            OpCode::SkipEqualNN(x, kk) => {
+                if self.v_registers[x as usize] == kk {
+                    self.pc += 2;
+                }
+            }
+            OpCode::SkipNotEqualNN(x, kk) => {
+                if self.v_registers[x as usize] != kk {
+                    self.pc += 2;
+                }
+            }
+            OpCode::SkipEqualXY(x, y) => {
+                if self.v_registers[x as usize] == self.v_registers[y as usize] {
+                    self.pc += 2;
+                }
+            }
+            OpCode::LDXY(x, y) => {
+                self.v_registers[x as usize] = self.v_registers[y as usize];
+            }
+            OpCode::BOR(x, y) => {
+                self.v_registers[x as usize] |= self.v_registers[y as usize];
+            }
+            OpCode::BAND(x, y) => {
+                self.v_registers[x as usize] &= self.v_registers[y as usize];
+            }
+            OpCode::BXOR(x, y) => {
+                self.v_registers[x as usize] ^= self.v_registers[y as usize];
+            }
+            OpCode::AddXY(x, y) => {
+                let (res, overflow) = self.v_registers[x as usize].overflowing_add(self.v_registers[y as usize]);
+                self.v_registers[x as usize] = res;
+                self.v_registers[0xF] = overflow as u8;
+            }
+            OpCode::SubXY(x, y) => {
+                let (res, overflow) = self.v_registers[x as usize].overflowing_sub(self.v_registers[y as usize]);
+                self.v_registers[x as usize] = res;
+                self.v_registers[0xF] = overflow as u8;
+            }
+            OpCode::SHR(x) => {
+                self.v_registers[0xF] = self.v_registers[x as usize] & 0x1;
+                self.v_registers[x as usize] >>= 1;
+            }
+            OpCode::SUBN(x, y) => {
+                let (res, overflow) = self.v_registers[y as usize].overflowing_sub(self.v_registers[x as usize]);
+                self.v_registers[x as usize] = res;
+                self.v_registers[0xF] = overflow as u8;
+            }
+            OpCode::SHL(x) => {
+                self.v_registers[0xF] = self.v_registers[x as usize] >> 7;
+                self.v_registers[x as usize] <<= 1;
+            }
+            OpCode::SkipNotEqualXY(x, y) => {
+                if self.v_registers[x as usize] != self.v_registers[y as usize] {
+                    self.pc += 2;
+                }
+            }
+            OpCode::JumpPlusV0(nnn) => {
+                self.pc = nnn + self.v_registers[0] as u16;
+            }
+            OpCode::RAND(x, kk) => {
+                let rand = rand::random::<u8>();
+                self.v_registers[x as usize] = rand & kk;
+            },
+            OpCode::RET => {
+                self.stack_pointer -= 1;
+                self.pc = self.address_stack.pop().unwrap();
+            }
+            OpCode::UNFINISHED => {}
         }
     }
     pub fn cycle(&mut self) {
@@ -204,5 +307,189 @@ mod tests {
         let res = chip8.decode(0xAC44);
         chip8.execute(res);
         assert_eq!(chip8.i_reg, 0xC44);
+    }
+    #[test]
+    fn execute_call() {
+        let mut chip8 = Chip8::new();
+        let res = chip8.decode(0x2111);
+        chip8.pc = 0x50;
+        chip8.execute(res);
+        assert_eq!(chip8.stack_pointer, 0x1);
+        assert_eq!(chip8.address_stack[0], 0x50);
+        assert_eq!(chip8.pc, 0x111)
+    }
+    #[test]
+    fn execute_se() {
+        let mut chip8 = Chip8::new();
+        chip8.pc = 0x00;
+        chip8.v_registers[0] = 0x11;
+        let res = chip8.decode(0x3011);
+        chip8.execute(res);
+        assert_eq!(chip8.pc, 2);
+        let res = chip8.decode(0x3014);
+        chip8.execute(res);
+        assert_eq!(chip8.pc, 2);
+    }
+    #[test]
+    fn execute_sne() {
+        let mut chip8 = Chip8::new();
+        chip8.pc = 0x00;
+        chip8.v_registers[0] = 0x11;
+        let res = chip8.decode(0x4015);
+        chip8.execute(res);
+        assert_eq!(chip8.pc, 2);
+        let res = chip8.decode(0x4011);
+        chip8.execute(res);
+        assert_eq!(chip8.pc, 2);
+    }
+    #[test]
+    fn execute_se_xy() {
+        let mut chip8 = Chip8::new();
+        chip8.pc = 0x00;
+        chip8.v_registers[0] = 0x11;
+        chip8.v_registers[1] = 0x11;
+        let res = chip8.decode(0x5010);
+        chip8.execute(res);
+        assert_eq!(chip8.pc, 2);
+        chip8.v_registers[0] = 0x14;
+        chip8.v_registers[1] = 0x11;
+        let res = chip8.decode(0x5010);
+        chip8.execute(res);
+        assert_eq!(chip8.pc, 2);
+    }
+    #[test]
+    fn execute_ldxy() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[1] = 10;
+        cpu.execute(OpCode::LDXY(0, 1));
+        assert_eq!(cpu.v_registers[0], 10);
+    }
+    #[test]
+    fn execute_bor() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0b1010;
+        cpu.v_registers[1] = 0b0101;
+        cpu.execute(OpCode::BOR(0, 1));
+        assert_eq!(cpu.v_registers[0], 0b1111);
+    }
+    #[test]
+    fn execute_band() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0b1010;
+        cpu.v_registers[1] = 0b0101;
+        cpu.execute(OpCode::BAND(0, 1));
+        assert_eq!(cpu.v_registers[0], 0b0000);
+    }
+    #[test]
+    fn execute_bxor() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0b1010;
+        cpu.v_registers[1] = 0b0101;
+        cpu.execute(OpCode::BXOR(0, 1));
+        assert_eq!(cpu.v_registers[0], 0b1111);
+        cpu.v_registers[0] = 0b1111;
+        cpu.v_registers[1] = 0b0101;
+        cpu.execute(OpCode::BXOR(0, 1));
+        assert_eq!(cpu.v_registers[0], 0b1010);
+    }
+    #[test]
+    fn execute_addxy() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0x10;
+        cpu.v_registers[1] = 0x10;
+        cpu.execute(OpCode::AddXY(0, 1));
+        assert_eq!(cpu.v_registers[0], 0x20);
+        assert_eq!(cpu.v_registers[0xF], 0x0);
+        cpu.v_registers[0] = 0xFF;
+        cpu.v_registers[1] = 0x02;
+        cpu.execute(OpCode::AddXY(0, 1));
+        assert_eq!(cpu.v_registers[0], 0x01);
+        assert_eq!(cpu.v_registers[0xF], 0x1);
+    }
+    #[test]
+    fn execute_subxy() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0b11;
+        cpu.v_registers[1] = 0b10;
+        cpu.execute(OpCode::SubXY(0, 1));
+        assert_eq!(cpu.v_registers[0], 0b01);
+        assert_eq!(cpu.v_registers[0xF], 0x0);
+        cpu.v_registers[0] = 0b01;
+        cpu.v_registers[1] = 0b10;
+        cpu.execute(OpCode::SubXY(0, 1));
+        assert_eq!(cpu.v_registers[0], 255);
+        assert_eq!(cpu.v_registers[0xF], 0x1);
+    }
+    #[test]
+    fn execute_shr() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0b1011;
+        cpu.execute(OpCode::SHR(0));
+        assert_eq!(cpu.v_registers[0], 0b0101);
+        assert_eq!(cpu.v_registers[0xF], 1);
+        cpu.v_registers[0] = 0b1010;
+        cpu.execute(OpCode::SHR(0));
+        assert_eq!(cpu.v_registers[0], 0b0101);
+        assert_eq!(cpu.v_registers[0xF], 0);
+    }
+    #[test]
+    fn execute_subn() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0b10;
+        cpu.v_registers[1] = 0b11;
+        cpu.execute(OpCode::SUBN(0, 1));
+        assert_eq!(cpu.v_registers[0], 1);
+        assert_eq!(cpu.v_registers[0xF], 0);
+        cpu.v_registers[0] = 0b11;
+        cpu.v_registers[1] = 0b10;
+        cpu.execute(OpCode::SUBN(0, 1));
+        assert_eq!(cpu.v_registers[0], 255);
+        assert_eq!(cpu.v_registers[0xF], 1);
+    }
+    #[test]
+    fn execute_shl() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0b10110000;
+        cpu.execute(OpCode::SHL(0));
+        assert_eq!(cpu.v_registers[0], 0b01100000);
+        assert_eq!(cpu.v_registers[0xF], 1);
+        cpu.v_registers[0] = 0b00110000;
+        cpu.execute(OpCode::SHL(0));
+        assert_eq!(cpu.v_registers[0], 0b01100000);
+        assert_eq!(cpu.v_registers[0xF], 0);
+    }
+    #[test]
+    fn execute_sne_xy() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0x10;
+        cpu.v_registers[1] = 0x10;
+        cpu.execute(OpCode::SkipNotEqualXY(0, 1));
+        assert_eq!(cpu.pc, 0x0);
+        cpu.v_registers[0] = 0x10;
+        cpu.v_registers[1] = 0x11;
+        cpu.execute(OpCode::SkipNotEqualXY(0, 1));
+        assert_eq!(cpu.pc, 0x2);
+    }
+    #[test]
+    fn execute_jp_v0() {
+        let mut cpu = Chip8::new();
+        cpu.v_registers[0] = 0x10;
+        cpu.execute(OpCode::JumpPlusV0(0x10));
+        assert_eq!(cpu.pc, 0x20);
+    }
+    #[test]
+    fn execute_rand() {
+        let mut cpu = Chip8::new();
+        cpu.execute(OpCode::RAND(0, 0xFF));
+        //assert_ne!(cpu.v_registers[0], 0);
+    }
+    #[test]
+    fn execute_return() {
+        let mut cpu = Chip8::new();
+        cpu.stack_pointer = 1;
+        cpu.address_stack.push(0xF0);
+        cpu.execute(OpCode::RET);
+        assert_eq!(cpu.stack_pointer, 0);
+        assert_eq!(cpu.pc, 0xF0);
     }
 }
